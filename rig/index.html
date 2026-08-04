@@ -948,7 +948,11 @@ function tick(now){
   var origFadeAlpha = fadeAlpha;
   fadeAlpha = function (L, e) {
     if (L.name && L.name.indexOf('expr_') === 0) {
-      return L.name === activeExpr ? 1 : 0;
+      if (L.name !== activeExpr && L.name !== 'expr_blush') return 0;
+      if (L.name === 'expr_blush') return 0; // 照れ頬は将来の感情実装で使用
+      // まばたきと連動: 目を閉じるほど表情目を消し、閉じ目(eye_close)に譲る
+      var v = (e.eyeOpenL + e.eyeOpenR) / 2;
+      return smooth((v - (0.10 + e.eyeEase * 0.45)) / 0.15);
     }
     var a = origFadeAlpha(L, e);
     if (L.fade === 'mouthOpen' && a > 0 && L.name.indexOf('mouth_open') === 0) {

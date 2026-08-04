@@ -136,6 +136,41 @@ function stampRect(diffFile, rect) {
     if (clean[i] && sizes[labels[i]] < maxSize * 0.15) clean[i] = 0
   }
 
+  // 2.7) 穴埋め: 外周からフラッドフィルで到達できない「内部の穴」をマスクに含める。
+  // （元絵と色が近い部分が差分から漏れ、下のレイヤーが透けて二重写しになる対策。
+  //   埋めた画素は差分画像由来なので、元絵と同じ見た目なら視覚的に無害）
+  {
+    const reach = new Uint8Array(rw * rh)
+    const q = []
+    for (let x = 0; x < rw; x++) {
+      for (const y of [0, rh - 1]) {
+        const i = y * rw + x
+        if (!clean[i] && !reach[i]) { reach[i] = 1; q.push(i) }
+      }
+    }
+    for (let y = 0; y < rh; y++) {
+      for (const x of [0, rw - 1]) {
+        const i = y * rw + x
+        if (!clean[i] && !reach[i]) { reach[i] = 1; q.push(i) }
+      }
+    }
+    while (q.length) {
+      const p = q.pop()
+      const px = p % rw
+      const py = (p / rw) | 0
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = px + dx
+        const ny = py + dy
+        if (nx < 0 || nx >= rw || ny < 0 || ny >= rh) continue
+        const np = ny * rw + nx
+        if (!clean[np] && !reach[np]) { reach[np] = 1; q.push(np) }
+      }
+    }
+    for (let i = 0; i < rw * rh; i++) {
+      if (!clean[i] && !reach[i]) clean[i] = 1 // 内部の穴を埋める
+    }
+  }
+
   const dilated = new Uint8Array(clean)
   for (let y = 1; y < rh - 1; y++) {
     for (let x = 1; x < rw - 1; x++) {
