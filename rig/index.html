@@ -297,7 +297,17 @@ function applyRig(rig){
     gl.bindBuffer(gl.ARRAY_BUFFER,L.vboUV); gl.bufferData(gl.ARRAY_BUFFER,uv,gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,L.ibo); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(idx),gl.STATIC_DRAW);
     const idata=(typeof ImageData!=='undefined')?new ImageData(new Uint8ClampedArray(L.img.data),L.img.width,L.img.height):L.img;
-    L.tex=mkTex(idata); delete L.img;
+    L.tex=mkTex(idata);
+    // 当たり判定用に1/4解像度のアルファマスクを保持してから元データを解放（フォーク独自）
+    (function(){
+      var mw=Math.max(1,L.w>>2), mh=Math.max(1,L.h>>2), m=new Uint8Array(mw*mh);
+      for(var yy=0;yy<mh;yy++)for(var xx=0;xx<mw;xx++){
+        var sy=Math.min(L.h-1,yy<<2), sx=Math.min(L.w-1,xx<<2);
+        m[yy*mw+xx]=L.img.data[(sy*L.w+sx)*4+3];
+      }
+      L.hitMask={w:mw,h:mh,data:m};
+    })();
+    delete L.img;
     layers.push(L);
   }
   cv.width=CW; cv.height=CH; fit();
@@ -936,13 +946,22 @@ function tick(now){
   function hitTestChar(clientX, clientY) {
     var cvEl = document.getElementById('cv');
     if (!cvEl || !layers.length) return false;
-    if (!charBB) charBB = computeCharBB();
-    if (!charBB) return false;
     var r = cvEl.getBoundingClientRect(); // CSS transform込みの実表示位置
     if (r.width <= 0 || r.height <= 0) return false;
     var px = ((clientX - r.left) / r.width) * CW;
     var py = ((clientY - r.top) / r.height) * CH;
-    return px >= charBB.x0 && px <= charBB.x1 && py >= charBB.y0 && py <= charBB.y1;
+    // ピクセル精密判定: いずれかのパーツの不透明画素の上か（1/4解像度マスク、±6pxの余裕）
+    for (var i = 0; i < layers.length; i++) {
+      var L = layers[i];
+      if (typeof L.x !== 'number' || !L.hitMask) continue;
+      var lx = px - L.x;
+      var ly = py - L.y;
+      if (lx < -6 || ly < -6 || lx >= L.w + 6 || ly >= L.h + 6) continue;
+      var mx = Math.max(0, Math.min(L.hitMask.w - 1, Math.round(lx) >> 2));
+      var my = Math.max(0, Math.min(L.hitMask.h - 1, Math.round(ly) >> 2));
+      if (L.hitMask.data[my * L.hitMask.w + mx] > 48) return true;
+    }
+    return false;
   }
 
   // 多段階口パク: 音量に応じて開き口の画像（う/え/あ/い）を切り替える。
@@ -1011,8 +1030,21 @@ function tick(now){
     } else if (m.type === 'expr') {
       activeExpr = typeof m.name === 'string' && m.name ? m.name : null;
     } else if (m.type === 'hittest') {
+      var dbg = null;
+      if (m.debug) {
+        var cvD = document.getElementById('cv');
+        var rD = cvD ? cvD.getBoundingClientRect() : null;
+        var masked = 0;
+        for (var di = 0; di < layers.length; di++) if (layers[di].hitMask) masked++;
+        dbg = {
+          layers: layers.length, masked: masked,
+          rect: rD ? [rD.left, rD.top, rD.width, rD.height] : null,
+          CW: CW, CH: CH,
+          sample: layers[0] ? { name: layers[0].name, x: layers[0].x, y: layers[0].y, w: layers[0].w, h: layers[0].h } : null,
+        };
+      }
       parent.postMessage(
-        { type: 'hittest-result', id: m.id, hit: hitTestChar(Number(m.x), Number(m.y)) },
+        { type: 'hittest-result', id: m.id, hit: hitTestChar(Number(m.x), Number(m.y)), debug: dbg },
         '*'
       );
     } else if (m.type === 'scale' || m.type === 'offset') {

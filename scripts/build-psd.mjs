@@ -378,15 +378,15 @@ const children = []
 const skipped = []
 for (const name of order) {
   const data = canvases.get(name)
-  let hasAlpha = false
+  // 薄すぎるアルファ（分解由来のゴースト画素）を掃除しつつ、有効画素を数える
+  let solidCount = 0
   for (let i = 3; i < data.length; i += 4) {
-    if (data[i] > 8) {
-      hasAlpha = true
-      break
-    }
+    if (data[i] < 24) data[i] = 0
+    else if (data[i] > 32) solidCount++
   }
-  if (!hasAlpha) {
-    skipped.push(name)
+  // 有効画素が少なすぎるレイヤーはゴミ（tail/wings等の幻影）として除外
+  if (solidCount < 12) {
+    skipped.push(`${name}(${solidCount}px)`)
     continue
   }
   children.push({
