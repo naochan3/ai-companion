@@ -56,6 +56,27 @@ for (const layer of meta.layers) {
   }
 }
 
+// 差分画像（1254px）から指定矩形（1024キャンバス座標）を全面レイヤーとして移植する
+const DIFF_DIR = 'C:/Users/nekop/Desktop/Development/repos/_active/ai-companion/assets/character/diffs'
+function stampRect(diffFile, rect) {
+  const img = PNG.sync.read(readFileSync(join(DIFF_DIR, diffFile)))
+  const scale = img.width / W
+  const out = new Uint8ClampedArray(W * H * 4)
+  for (let y = Math.max(0, rect.y0); y < Math.min(H, rect.y1); y++) {
+    for (let x = Math.max(0, rect.x0); x < Math.min(W, rect.x1); x++) {
+      const sx = Math.min(img.width - 1, Math.round(x * scale))
+      const sy = Math.min(img.height - 1, Math.round(y * scale))
+      const si = (sy * img.width + sx) * 4
+      const di = (y * W + x) * 4
+      out[di] = img.data[si]
+      out[di + 1] = img.data[si + 1]
+      out[di + 2] = img.data[si + 2]
+      out[di + 3] = 255
+    }
+  }
+  return out
+}
+
 // 口のパクパク改善: 分解された口（閉じ口のドット）は mouth_close に割り当て、
 // 開き口 mouth_open はアニメ調の楕円口を描画して生成する（おちょぼ口対策）。
 if (canvases.has('mouth')) {
@@ -79,35 +100,43 @@ if (canvases.has('mouth')) {
     // mouth_close = 元の口
     canvases.set('mouth_close', src)
     order[order.indexOf('mouth')] = 'mouth_close'
-    // mouth_open = 楕円の開き口（作画スタイルに合わせたシンプルな形）
-    const openW = Math.min(42, Math.max(26, closedW * 2.4))
-    const openH = openW * 0.72
-    const openCy = cy + openH * 0.18 // 少し下に開く
-    const openLayer = new Uint8ClampedArray(W * H * 4)
-    const OUTLINE = [70, 45, 45]   // 輪郭（こげ茶）
-    const INNER = [150, 82, 84]    // 口内
-    const TONGUE = [214, 130, 125] // 舌のほんのり
-    for (let y = Math.floor(openCy - openH); y <= Math.ceil(openCy + openH); y++) {
-      for (let x = Math.floor(cx - openW); x <= Math.ceil(cx + openW); x++) {
-        if (x < 0 || x >= W || y < 0 || y >= H) continue
-        const dx = (x - cx) / (openW / 2)
-        const dy = (y - openCy) / (openH / 2)
-        const d = Math.sqrt(dx * dx + dy * dy)
-        if (d > 1.0) continue
-        const i = (y * W + x) * 4
-        let col
-        if (d > 0.82) col = OUTLINE
-        else if (dy > 0.25 && d < 0.62) col = TONGUE
-        else col = INNER
-        openLayer[i] = col[0]
-        openLayer[i + 1] = col[1]
-        openLayer[i + 2] = col[2]
-        openLayer[i + 3] = d > 0.94 ? Math.round(255 * (1 - (d - 0.94) / 0.06)) : 255
-      }
-    }
+    // mouth_open = ユーザー納品の差分画像（自然な半開き）から矩形移植
+    const openLayer = stampRect('mouth-e.png', {
+      x0: Math.round(cx - 48), x1: Math.round(cx + 48),
+      y0: Math.round(cy - 28), y1: Math.round(cy + 38),
+    })
     canvases.set('mouth_open', openLayer)
     order.splice(order.indexOf('mouth_close') + 1, 0, 'mouth_open')
-    console.log(`口を2枚構成に: mouth_close(元絵) + mouth_open(生成 ${Math.round(openW)}x${Math.round(openH)} @${Math.round(cx)},${Math.round(openCy)})`)
+    console.log(`口を2枚構成に: mouth_close(元絵) + mouth_open(差分mouth-e移植 @${Math.round(cx)},${Math.round(cy)})`)
+  }
+}
+
+// まばたき品質向上: 納品された閉じ目差分から eye_close レイヤーを作る
+{
+  // 目パーツ（白目+瞳+まつ毛）の合成bboxを計測
+  let minX = W, maxX = 0, minY = H, maxY = 0, found = false
+  for (const nm of ['eyewhite', 'irides', 'eyelash']) {
+    const c = canvases.get(nm)
+    if (!c) continue
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (c[(y * W + x) * 4 + 3] > 32) {
+          found = true
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+  }
+  if (found) {
+    const eyeClose = stampRect('eyes-close.png', {
+      x0: minX - 14, x1: maxX + 14, y0: minY - 16, y1: maxY + 10,
+    })
+    canvases.set('eye_close', eyeClose)
+    order.splice(order.indexOf('eyebrow') + 1, 0, 'eye_close')
+    console.log(`eye_close を閉じ目差分から移植 (${minX - 14},${minY - 16})-(${maxX + 14},${maxY + 10})`)
   }
 }
 
@@ -174,7 +203,7 @@ const Z_ORDER = [
   'legwear', 'footwear', 'bottomwear',
   'topwear', 'neckwear', 'handwear', 'objects',
   'ears', 'earwear', 'face', 'mouth_close', 'mouth_open', 'mouth', 'nose',
-  'eyewhite', 'irides', 'eyelash', 'eyebrow', 'eyewear',
+  'eyewhite', 'irides', 'eyelash', 'eyebrow', 'eye_close', 'eyewear',
   'front hair', 'headwear',
 ]
 order.sort((a, b) => {
