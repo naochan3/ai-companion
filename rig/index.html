@@ -916,7 +916,8 @@ function tick(now){
       T.mouthOpen = Math.max(0, Math.min(1, Number(m.value) || 0));
     } else if (m.type === 'preset' && presets[m.name]) {
       const p = presets[m.name];
-      for (const k in p) setSlider(k, p[k]);
+      // 口の開閉は音声側が専有するため、プリセットの mouthOpen は適用しない
+      for (const k in p) { if (k === 'mouthOpen') continue; setSlider(k, p[k]); }
     } else if (m.type === 'param' && (m.key in T)) {
       T[m.key] = Number(m.value) || 0;
     } else if (m.type === 'auto' && m.patch) {
