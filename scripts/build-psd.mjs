@@ -233,12 +233,34 @@ if (canvases.has('mouth')) {
     }
   }
   if (found) {
-    const eyeClose = stampRect('eyes-close.png', {
-      x0: minX - 14, x1: maxX + 14, y0: minY - 16, y1: maxY + 10,
-    })
+    const eyeRect = { x0: minX - 14, x1: maxX + 14, y0: minY - 16, y1: maxY + 10 }
+    const eyeClose = stampRect('eyes-close.png', eyeRect)
     canvases.set('eye_close', eyeClose)
     order.splice(order.indexOf('eyebrow') + 1, 0, 'eye_close')
-    console.log(`eye_close を閉じ目差分から移植 (${minX - 14},${minY - 16})-(${maxX + 14},${maxY + 10})`)
+    console.log(`eye_close を閉じ目差分から移植 (${eyeRect.x0},${eyeRect.y0})-(${eyeRect.x1},${eyeRect.y1})`)
+
+    // 表情用の目オーバーレイ（埋め込み側が activeExpr で1枚だけ表示する）
+    const exprs = [
+      ['expr_normal', 'eyes-normal.png'],   // デフォルト（ジト目解消の普通目）
+      ['expr_wide', 'eyes-wide.png'],       // 驚き
+      ['expr_sparkle', 'eyes-sparkle.png'], // きらきら（エンジンON）
+      ['expr_smile', 'eyes-smile.png'],     // 笑い目
+      ['expr_jito', 'eyes-jito.png'],       // 強ジト目（静かに圧）
+    ]
+    // 見開き等は元の半目より大きいため、表情用は広めの矩形で抽出する
+    const exprRect = {
+      x0: minX - 24, x1: maxX + 24, y0: minY - 24, y1: maxY + 38,
+    }
+    let at = order.indexOf('eyebrow') + 1 // eye_close より奥・眉より手前
+    for (const [name, file] of exprs) {
+      canvases.set(name, stampRect(file, exprRect))
+      order.splice(at++, 0, name)
+    }
+    // 照れ頬（頬の領域。将来の感情拡張用ストック、既定非表示）
+    const cheekRect = { x0: minX - 20, x1: maxX + 20, y0: maxY - 6, y1: maxY + 46 }
+    canvases.set('expr_blush', stampRect('cheeks-blush.png', cheekRect))
+    order.splice(at++, 0, 'expr_blush')
+    console.log('表情オーバーレイ6種（normal/wide/sparkle/smile/jito/blush）を追加')
   }
 }
 
@@ -305,7 +327,9 @@ const Z_ORDER = [
   'legwear', 'footwear', 'bottomwear',
   'topwear', 'neckwear', 'handwear', 'objects',
   'ears', 'earwear', 'face', 'mouth_close', 'mouth_open', 'mouth', 'nose',
-  'eyewhite', 'irides', 'eyelash', 'eyebrow', 'eye_close', 'eyewear',
+  'eyewhite', 'irides', 'eyelash', 'eyebrow',
+  'expr_blush', 'expr_normal', 'expr_wide', 'expr_sparkle', 'expr_smile', 'expr_jito',
+  'eye_close', 'eyewear',
   'front hair', 'headwear',
 ]
 const zIndexOf = (name) => {

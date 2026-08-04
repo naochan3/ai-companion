@@ -933,8 +933,23 @@ function tick(now){
   var hasVariant = function (name) {
     return layers.some(function (L) { return L.name === name; });
   };
+  // 表情目オーバーレイ: activeExpr の1枚だけ表示（nullなら元の眠り半目）
+  var activeExpr = 'expr_normal';
+  var PRESET_TO_EXPR = {
+    neutral: 'expr_normal',
+    smile: 'expr_smile',
+    usume: null,            // 眠い系は元絵の半目をそのまま使う
+    jito: 'expr_jito',
+    surprise: 'expr_wide',
+    sparkle: 'expr_sparkle',
+    winkL: 'expr_normal',
+    winkR: 'expr_normal',
+  };
   var origFadeAlpha = fadeAlpha;
   fadeAlpha = function (L, e) {
+    if (L.name && L.name.indexOf('expr_') === 0) {
+      return L.name === activeExpr ? 1 : 0;
+    }
     var a = origFadeAlpha(L, e);
     if (L.fade === 'mouthOpen' && a > 0 && L.name.indexOf('mouth_open') === 0) {
       var target = hasVariant(activeMouth) ? activeMouth : 'mouth_open';
@@ -951,10 +966,15 @@ function tick(now){
       if (v > 0.06) {
         activeMouth = pickMouthVariant(v, performance.now());
       }
-    } else if (m.type === 'preset' && presets[m.name]) {
-      const p = presets[m.name];
-      // 口の開閉は音声側が専有するため、プリセットの mouthOpen は適用しない
-      for (const k in p) { if (k === 'mouthOpen') continue; setSlider(k, p[k]); }
+    } else if (m.type === 'preset') {
+      if (m.name in PRESET_TO_EXPR) activeExpr = PRESET_TO_EXPR[m.name];
+      if (presets[m.name]) {
+        const p = presets[m.name];
+        // 口の開閉は音声側が専有するため、プリセットの mouthOpen は適用しない
+        for (const k in p) { if (k === 'mouthOpen') continue; setSlider(k, p[k]); }
+      }
+    } else if (m.type === 'expr') {
+      activeExpr = typeof m.name === 'string' && m.name ? m.name : null;
     } else if (m.type === 'param' && (m.key in T)) {
       T[m.key] = Number(m.value) || 0;
     } else if (m.type === 'auto' && m.patch) {
