@@ -980,6 +980,13 @@ function tick(now){
       }
     } else if (m.type === 'expr') {
       activeExpr = typeof m.name === 'string' && m.name ? m.name : null;
+    } else if (m.type === 'scale') {
+      var sc = Math.max(0.3, Math.min(2.5, Number(m.value) || 1));
+      var cvEl = document.getElementById('cv');
+      if (cvEl) {
+        cvEl.style.transformOrigin = '50% 100%';
+        cvEl.style.transform = 'scale(' + sc + ')';
+      }
     } else if (m.type === 'param' && (m.key in T)) {
       T[m.key] = Number(m.value) || 0;
     } else if (m.type === 'auto' && m.patch) {
