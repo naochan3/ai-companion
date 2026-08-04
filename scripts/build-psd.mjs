@@ -101,6 +101,41 @@ function stampRect(diffFile, rect) {
       if (n < 2) clean[y * rw + x] = 0
     }
   }
+  // 2.5) 連結成分解析: 最大成分の15%未満の破片（描画ブレ由来の迷い線）を捨てる
+  const labels = new Int32Array(rw * rh).fill(-1)
+  const sizes = []
+  const stack = []
+  for (let i = 0; i < rw * rh; i++) {
+    if (!clean[i] || labels[i] >= 0) continue
+    const id = sizes.length
+    let size = 0
+    stack.push(i)
+    labels[i] = id
+    while (stack.length) {
+      const p = stack.pop()
+      size++
+      const px = p % rw
+      const py = (p / rw) | 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = px + dx
+          const ny = py + dy
+          if (nx < 0 || nx >= rw || ny < 0 || ny >= rh) continue
+          const np = ny * rw + nx
+          if (clean[np] && labels[np] < 0) {
+            labels[np] = id
+            stack.push(np)
+          }
+        }
+      }
+    }
+    sizes.push(size)
+  }
+  const maxSize = Math.max(1, ...sizes)
+  for (let i = 0; i < rw * rh; i++) {
+    if (clean[i] && sizes[labels[i]] < maxSize * 0.15) clean[i] = 0
+  }
+
   const dilated = new Uint8Array(clean)
   for (let y = 1; y < rh - 1; y++) {
     for (let x = 1; x < rw - 1; x++) {
