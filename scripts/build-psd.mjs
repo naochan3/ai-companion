@@ -56,6 +56,78 @@ for (const layer of meta.layers) {
   }
 }
 
+// にんじんヘアピン修復: 分解時にピン本体の一部が髪レイヤーへ吸われて欠けるため、
+// 元画像からピン領域を切り出して headwear レイヤーを差し替える。
+// マスク: ほぼ黒(髪)とほぼ白(背景)を除外した色付きピクセルだけ移植する。
+{
+  const ORIG = 'C:/Users/nekop/Desktop/Development/repos/_active/ai-companion/assets/character/nemu-base.png'
+  const orig = PNG.sync.read(readFileSync(ORIG))
+  const scale = orig.width / W // 1254/1024
+  // ピンのbbox（1024キャンバス座標）
+  const box = { x0: 468, y0: 60, x1: 552, y1: 148 }
+  const head = canvasFor('headwear')
+  head.fill(0)
+  for (let y = box.y0; y < box.y1; y++) {
+    for (let x = box.x0; x < box.x1; x++) {
+      // 最近傍で元画像からサンプリング
+      const sx = Math.min(orig.width - 1, Math.round(x * scale))
+      const sy = Math.min(orig.height - 1, Math.round(y * scale))
+      const si = (sy * orig.width + sx) * 4
+      const r = orig.data[si]
+      const g = orig.data[si + 1]
+      const b = orig.data[si + 2]
+      const isHair = r < 70 && g < 70 && b < 70
+      const isBg = r > 232 && g > 232 && b > 232
+      const saturation = Math.max(r, g, b) - Math.min(r, g, b)
+      if (isHair || isBg || saturation < 40) continue // 彩度が低い=髪の照り等は除外
+      const di = (y * W + x) * 4
+      head[di] = r
+      head[di + 1] = g
+      head[di + 2] = b
+      head[di + 3] = 255
+    }
+  }
+  console.log('headwear をオリジナル画像のピン領域から再構築しました')
+}
+
+// 既知の破綻対策（Anime2.5DRig README公認）: neck は topwear と z-fighting するため
+// 「首を下に敷いた topwear 一体型レイヤー」に統合する
+if (canvases.has('neck') && canvases.has('topwear')) {
+  const neck = canvases.get('neck')
+  const top = canvases.get('topwear')
+  // 服を先に敷き、その上に首の可視部分を重ねる。
+  // （topwear の補完画素が首を覆い隠すため、首が最後）
+  const merged = new Uint8ClampedArray(top)
+  for (let i = 0; i < neck.length; i += 4) {
+    if (neck[i + 3] > 0) {
+      merged[i] = neck[i]
+      merged[i + 1] = neck[i + 1]
+      merged[i + 2] = neck[i + 2]
+      merged[i + 3] = neck[i + 3]
+    }
+  }
+  canvases.set('topwear', merged)
+  canvases.delete('neck')
+  order.splice(order.indexOf('neck'), 1)
+  console.log('topwear の上に neck を統合しました（襟の補完画素による首隠れ対策）')
+}
+
+// 描画順テンプレート（奥→手前）。PSDのレイヤー順=描画順なので明示的に制御する。
+// 未知レイヤーは分解JSONの元の並びで objects の位置に挟む。
+const Z_ORDER = [
+  'wings', 'tail', 'back hair',
+  'legwear', 'footwear', 'bottomwear',
+  'topwear', 'neckwear', 'handwear', 'objects',
+  'ears', 'earwear', 'face', 'mouth', 'nose',
+  'eyewhite', 'irides', 'eyelash', 'eyebrow', 'eyewear',
+  'front hair', 'headwear',
+]
+order.sort((a, b) => {
+  const ia = Z_ORDER.indexOf(a)
+  const ib = Z_ORDER.indexOf(b)
+  return (ia < 0 ? Z_ORDER.indexOf('objects') : ia) - (ib < 0 ? Z_ORDER.indexOf('objects') : ib)
+})
+
 const children = []
 const skipped = []
 for (const name of order) {
