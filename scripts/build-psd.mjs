@@ -56,6 +56,61 @@ for (const layer of meta.layers) {
   }
 }
 
+// 口のパクパク改善: 分解された口（閉じ口のドット）は mouth_close に割り当て、
+// 開き口 mouth_open はアニメ調の楕円口を描画して生成する（おちょぼ口対策）。
+if (canvases.has('mouth')) {
+  const src = canvases.get('mouth')
+  // 閉じ口の重心と大きさを計測
+  let sx = 0, sy = 0, n = 0, minX = W, maxX = 0
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const a = src[(y * W + x) * 4 + 3]
+      if (a > 32) {
+        sx += x; sy += y; n++
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+      }
+    }
+  }
+  if (n > 0) {
+    const cx = sx / n
+    const cy = sy / n
+    const closedW = Math.max(10, maxX - minX)
+    // mouth_close = 元の口
+    canvases.set('mouth_close', src)
+    order[order.indexOf('mouth')] = 'mouth_close'
+    // mouth_open = 楕円の開き口（作画スタイルに合わせたシンプルな形）
+    const openW = Math.min(42, Math.max(26, closedW * 2.4))
+    const openH = openW * 0.72
+    const openCy = cy + openH * 0.18 // 少し下に開く
+    const openLayer = new Uint8ClampedArray(W * H * 4)
+    const OUTLINE = [70, 45, 45]   // 輪郭（こげ茶）
+    const INNER = [150, 82, 84]    // 口内
+    const TONGUE = [214, 130, 125] // 舌のほんのり
+    for (let y = Math.floor(openCy - openH); y <= Math.ceil(openCy + openH); y++) {
+      for (let x = Math.floor(cx - openW); x <= Math.ceil(cx + openW); x++) {
+        if (x < 0 || x >= W || y < 0 || y >= H) continue
+        const dx = (x - cx) / (openW / 2)
+        const dy = (y - openCy) / (openH / 2)
+        const d = Math.sqrt(dx * dx + dy * dy)
+        if (d > 1.0) continue
+        const i = (y * W + x) * 4
+        let col
+        if (d > 0.82) col = OUTLINE
+        else if (dy > 0.25 && d < 0.62) col = TONGUE
+        else col = INNER
+        openLayer[i] = col[0]
+        openLayer[i + 1] = col[1]
+        openLayer[i + 2] = col[2]
+        openLayer[i + 3] = d > 0.94 ? Math.round(255 * (1 - (d - 0.94) / 0.06)) : 255
+      }
+    }
+    canvases.set('mouth_open', openLayer)
+    order.splice(order.indexOf('mouth_close') + 1, 0, 'mouth_open')
+    console.log(`口を2枚構成に: mouth_close(元絵) + mouth_open(生成 ${Math.round(openW)}x${Math.round(openH)} @${Math.round(cx)},${Math.round(openCy)})`)
+  }
+}
+
 // にんじんヘアピン修復: 分解時にピン本体の一部が髪レイヤーへ吸われて欠けるため、
 // 元画像からピン領域を切り出して headwear レイヤーを差し替える。
 // マスク: ほぼ黒(髪)とほぼ白(背景)を除外した色付きピクセルだけ移植する。
@@ -118,7 +173,7 @@ const Z_ORDER = [
   'wings', 'tail', 'back hair',
   'legwear', 'footwear', 'bottomwear',
   'topwear', 'neckwear', 'handwear', 'objects',
-  'ears', 'earwear', 'face', 'mouth', 'nose',
+  'ears', 'earwear', 'face', 'mouth_close', 'mouth_open', 'mouth', 'nose',
   'eyewhite', 'irides', 'eyelash', 'eyebrow', 'eyewear',
   'front hair', 'headwear',
 ]
