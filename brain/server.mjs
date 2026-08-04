@@ -44,13 +44,35 @@ const OUTPUT_CONTRACT = `
 - 各文の先頭に [neutral] [happy] [angry] [sad] [relaxed] [surprised] のいずれかの感情タグを付ける
 - 例: [happy]おかえり！ [neutral]今日はどんな一日だった？`;
 
+// persona.md があればフロントの設定より優先する（人格の正本をbrain側で一元管理）
+import { readFileSync as readFileSyncFs, existsSync as existsSyncFs } from "node:fs";
+import { join as joinPath, dirname as dirnamePath } from "node:path";
+import { fileURLToPath as fileURLToPathUrl } from "node:url";
+const PERSONA_FILE = joinPath(
+  dirnamePath(fileURLToPathUrl(import.meta.url)),
+  "persona.md"
+);
+function loadPersona() {
+  try {
+    if (existsSyncFs(PERSONA_FILE)) {
+      const t = readFileSyncFs(PERSONA_FILE, "utf8").trim();
+      if (t) return t;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 async function handleChat(req, res, body) {
   const { messages = [], stream = false } = body;
+  const personaOverride = loadPersona();
   const system =
-    messages
-      .filter((m) => m.role === "system")
-      .map((m) => contentToText(m.content))
-      .join("\n") + OUTPUT_CONTRACT;
+    (personaOverride ??
+      messages
+        .filter((m) => m.role === "system")
+        .map((m) => contentToText(m.content))
+        .join("\n")) + OUTPUT_CONTRACT;
 
   // 常駐ワーカーが会話文脈を保持するため、通常は最新のユーザー発言だけ渡す。
   // ワーカーが新規起動（初回/人格変更/クラッシュ後）の時だけ履歴を復元する。
