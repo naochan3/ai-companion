@@ -918,6 +918,33 @@ function tick(now){
   // キャラの表示変形（拡大率・位置オフセット。親からのscale/offsetメッセージで更新）
   var embScale = 1, embX = 0, embY = 0;
 
+  // キャラ当たり判定: 全パーツのbbox合成（キャンバス画素座標）
+  var charBB = null;
+  function computeCharBB() {
+    if (!layers.length) return null;
+    var x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (var i = 0; i < layers.length; i++) {
+      var L = layers[i];
+      if (typeof L.x !== 'number') continue;
+      if (L.x < x0) x0 = L.x;
+      if (L.y < y0) y0 = L.y;
+      if (L.x + L.w > x1) x1 = L.x + L.w;
+      if (L.y + L.h > y1) y1 = L.y + L.h;
+    }
+    return x1 > x0 ? { x0: x0, y0: y0, x1: x1, y1: y1 } : null;
+  }
+  function hitTestChar(clientX, clientY) {
+    var cvEl = document.getElementById('cv');
+    if (!cvEl || !layers.length) return false;
+    if (!charBB) charBB = computeCharBB();
+    if (!charBB) return false;
+    var r = cvEl.getBoundingClientRect(); // CSS transform込みの実表示位置
+    if (r.width <= 0 || r.height <= 0) return false;
+    var px = ((clientX - r.left) / r.width) * CW;
+    var py = ((clientY - r.top) / r.height) * CH;
+    return px >= charBB.x0 && px <= charBB.x1 && py >= charBB.y0 && py <= charBB.y1;
+  }
+
   // 多段階口パク: 音量に応じて開き口の画像（う/え/あ/い）を切り替える。
   // PSDに mouth_open(え) / mouth_open_2(う) / mouth_open_3(あ) / mouth_open_4(い) がある前提。
   // 無い場合は常に mouth_open が選ばれ従来動作になる。
@@ -983,6 +1010,11 @@ function tick(now){
       }
     } else if (m.type === 'expr') {
       activeExpr = typeof m.name === 'string' && m.name ? m.name : null;
+    } else if (m.type === 'hittest') {
+      parent.postMessage(
+        { type: 'hittest-result', id: m.id, hit: hitTestChar(Number(m.x), Number(m.y)) },
+        '*'
+      );
     } else if (m.type === 'scale' || m.type === 'offset') {
       if (m.type === 'scale') embScale = Math.max(0.3, Math.min(2.5, Number(m.value) || 1));
       if (m.type === 'offset') { embX = Number(m.x) || 0; embY = Number(m.y) || 0; }
