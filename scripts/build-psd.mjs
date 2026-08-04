@@ -193,7 +193,23 @@ if (canvases.has('mouth')) {
     })
     canvases.set('mouth_open', openLayer)
     order.splice(order.indexOf('mouth_close') + 1, 0, 'mouth_open')
-    console.log(`口を2枚構成に: mouth_close(元絵) + mouth_open(差分mouth-e移植 @${Math.round(cx)},${Math.round(cy)})`)
+    // 多段階口パク用: う/あ/い も同じ矩形から抽出して追加
+    // （命名 mouth_open_N でリグのmouth_openスロットに乗り、埋め込み側が音量で切替）
+    const variants = [
+      ['mouth_open_2', 'mouth-u.png'],
+      ['mouth_open_3', 'mouth-a.png'],
+      ['mouth_open_4', 'mouth-i.png'],
+    ]
+    const mouthRect = {
+      x0: Math.round(cx - 48), x1: Math.round(cx + 48),
+      y0: Math.round(cy - 28), y1: Math.round(cy + 38),
+    }
+    let insertAt = order.indexOf('mouth_open') + 1
+    for (const [name, file] of variants) {
+      canvases.set(name, stampRect(file, mouthRect))
+      order.splice(insertAt++, 0, name)
+    }
+    console.log(`口を5枚構成に: mouth_close + mouth_open(え) + う/あ/い @${Math.round(cx)},${Math.round(cy)}`)
   }
 }
 
@@ -292,11 +308,12 @@ const Z_ORDER = [
   'eyewhite', 'irides', 'eyelash', 'eyebrow', 'eye_close', 'eyewear',
   'front hair', 'headwear',
 ]
-order.sort((a, b) => {
-  const ia = Z_ORDER.indexOf(a)
-  const ib = Z_ORDER.indexOf(b)
-  return (ia < 0 ? Z_ORDER.indexOf('objects') : ia) - (ib < 0 ? Z_ORDER.indexOf('objects') : ib)
-})
+const zIndexOf = (name) => {
+  const base = name.replace(/_\d+$/, '') // mouth_open_2 → mouth_open
+  const i = Z_ORDER.indexOf(base)
+  return i < 0 ? Z_ORDER.indexOf('objects') : i
+}
+order.sort((a, b) => zIndexOf(a) - zIndexOf(b))
 
 const children = []
 const skipped = []

@@ -915,10 +915,40 @@ function tick(now){
       .catch(function (e) { parent.postMessage({ type: 'rig-error', message: String(e) }, '*'); });
   }
 
+  // 多段階口パク: 音量に応じて開き口の画像（う/え/あ/い）を切り替える。
+  // PSDに mouth_open(え) / mouth_open_2(う) / mouth_open_3(あ) / mouth_open_4(い) がある前提。
+  // 無い場合は常に mouth_open が選ばれ従来動作になる。
+  var activeMouth = 'mouth_open';
+  var lastMouthSwitch = 0;
+  function pickMouthVariant(v) {
+    var r = Math.random();
+    if (v < 0.32) return 'mouth_open_2';
+    if (v < 0.68) return r < 0.72 ? 'mouth_open' : 'mouth_open_4';
+    return r < 0.7 ? 'mouth_open_3' : 'mouth_open_4';
+  }
+  var hasVariant = function (name) {
+    return layers.some(function (L) { return L.name === name; });
+  };
+  var origFadeAlpha = fadeAlpha;
+  fadeAlpha = function (L, e) {
+    var a = origFadeAlpha(L, e);
+    if (L.fade === 'mouthOpen' && a > 0 && L.name.indexOf('mouth_open') === 0) {
+      var target = hasVariant(activeMouth) ? activeMouth : 'mouth_open';
+      return L.name === target ? a : 0;
+    }
+    return a;
+  };
+
   window.addEventListener('message', function (ev) {
     const m = ev.data || {};
     if (m.type === 'mouth') {
-      T.mouthOpen = Math.max(0, Math.min(1, Number(m.value) || 0));
+      var v = Math.max(0, Math.min(1, Number(m.value) || 0));
+      T.mouthOpen = v;
+      var now = performance.now();
+      if (v > 0.06 && now - lastMouthSwitch > 130) {
+        lastMouthSwitch = now;
+        activeMouth = pickMouthVariant(v);
+      }
     } else if (m.type === 'preset' && presets[m.name]) {
       const p = presets[m.name];
       // 口の開閉は音声側が専有するため、プリセットの mouthOpen は適用しない
