@@ -934,16 +934,17 @@ function tick(now){
     return layers.some(function (L) { return L.name === name; });
   };
   // 表情目オーバーレイ: activeExpr の1枚だけ表示（nullなら元の眠り半目）
-  var activeExpr = 'expr_normal';
+  var activeExpr = null; // 通常＝元絵の眠そうな半目（ネムの基本形）
   var PRESET_TO_EXPR = {
-    neutral: 'expr_normal',
+    neutral: null,           // 通常は眠り半目
     smile: 'expr_smile',
-    usume: null,            // 眠い系は元絵の半目をそのまま使う
+    usume: null,
     jito: 'expr_jito',
     surprise: 'expr_wide',
-    sparkle: 'expr_sparkle',
-    winkL: 'expr_normal',
-    winkR: 'expr_normal',
+    sparkle: 'expr_sparkle', // エンジンON（きらきら）
+    awake: 'expr_normal',    // エンジンON（目が覚めた普通目）
+    winkL: null,
+    winkR: null,
   };
   var origFadeAlpha = fadeAlpha;
   fadeAlpha = function (L, e) {
