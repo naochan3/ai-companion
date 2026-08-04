@@ -918,13 +918,17 @@ function tick(now){
   // 多段階口パク: 音量に応じて開き口の画像（う/え/あ/い）を切り替える。
   // PSDに mouth_open(え) / mouth_open_2(う) / mouth_open_3(あ) / mouth_open_4(い) がある前提。
   // 無い場合は常に mouth_open が選ばれ従来動作になる。
+  // 基本は「え」の開け閉めだけ。形の切替は控えめ＋一定時間ホールドで自然に見せる。
   var activeMouth = 'mouth_open';
-  var lastMouthSwitch = 0;
-  function pickMouthVariant(v) {
-    var r = Math.random();
-    if (v < 0.32) return 'mouth_open_2';
-    if (v < 0.68) return r < 0.72 ? 'mouth_open' : 'mouth_open_4';
-    return r < 0.7 ? 'mouth_open_3' : 'mouth_open_4';
+  var mouthHoldUntil = 0;
+  function pickMouthVariant(v, now) {
+    if (now < mouthHoldUntil) return activeMouth;
+    var next;
+    if (v < 0.28) next = 'mouth_open_2';            // 小声の尻すぼみ → う
+    else if (v > 0.78) next = 'mouth_open_3';       // 強い声だけ → あ
+    else next = Math.random() < 0.08 ? 'mouth_open_4' : 'mouth_open'; // 基本え、まれに い
+    if (next !== activeMouth) mouthHoldUntil = now + 380; // 切替後は0.38秒維持
+    return next;
   }
   var hasVariant = function (name) {
     return layers.some(function (L) { return L.name === name; });
@@ -944,10 +948,8 @@ function tick(now){
     if (m.type === 'mouth') {
       var v = Math.max(0, Math.min(1, Number(m.value) || 0));
       T.mouthOpen = v;
-      var now = performance.now();
-      if (v > 0.06 && now - lastMouthSwitch > 130) {
-        lastMouthSwitch = now;
-        activeMouth = pickMouthVariant(v);
+      if (v > 0.06) {
+        activeMouth = pickMouthVariant(v, performance.now());
       }
     } else if (m.type === 'preset' && presets[m.name]) {
       const p = presets[m.name];
