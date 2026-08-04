@@ -1,22 +1,31 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startServer } from "../server.mjs";
+import { sharedWorker } from "../lib/worker.mjs";
 
 let server;
 let port;
 
 before(async () => {
-  // claude を node ワンライナーに差し替え: 固定文字列を出力するだけの偽バックエンド
+  // claude を偽の常駐stream-jsonプロセスに差し替え:
+  // stdinに1行来るたびに text_delta と result を返す
   process.env.BRAIN_CLAUDE_CMD = process.execPath;
   process.env.BRAIN_CLAUDE_ARGS_OVERRIDE = JSON.stringify([
     "-e",
-    "console.log('テスト応答です')",
+    `const rl=require('readline').createInterface({input:process.stdin});rl.on('line',()=>{process.stdout.write(JSON.stringify({type:'stream_event',event:{delta:{type:'text_delta',text:'テスト応答です😄'}}})+'\\n');process.stdout.write(JSON.stringify({type:'result',is_error:false,result:'テスト応答です😄'})+'\\n');});`,
   ]);
   server = await startServer(0);
   port = server.address().port;
 });
 
-after(() => server.close());
+after(() => {
+  server.close();
+  try {
+    sharedWorker.child?.kill();
+  } catch {
+    /* ignore */
+  }
+});
 
 test("GET /v1/models がモデル一覧を返す", async () => {
   const res = await fetch(`http://127.0.0.1:${port}/v1/models`);
@@ -36,6 +45,7 @@ test("POST /v1/chat/completions (非stream)", async () => {
   });
   assert.equal(res.status, 200);
   const body = await res.json();
+  // 絵文字はサニタイズで除去される
   assert.equal(body.choices[0].message.content, "テスト応答です");
   assert.equal(body.choices[0].finish_reason, "stop");
 });
