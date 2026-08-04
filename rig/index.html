@@ -714,9 +714,11 @@ function deform(L, e){
       if(thM){ const ct=Math.cos(thM), st=Math.sin(thM), rx=x-A.mouth.cx, ry=y-A.mouth.cy;
         x=A.mouth.cx+rx*ct-ry*st; y=A.mouth.cy+rx*st+ry*ct; }
     }
-    if(bn==='face' && y>A.mouth.cy){
-      y += mo*6*FS*smooth((y-A.mouth.cy)/(A.face.y1-A.mouth.cy));
-    }
+    // 顎追従は無効化: 差分絵の口自体に開きが描かれており、顔下半分を
+    // 伸ばすと顎線が首の上をスライドして線ノイズ・輪郭の伸び縮みに見える
+    // if(bn==='face' && y>A.mouth.cy){
+    //   y += mo*6*FS*smooth((y-A.mouth.cy)/(A.face.y1-A.mouth.cy));
+    // }
     // --- head transform ---
     let hw = isHead?1:(L.group==='body'?0.16:0);   // body subtly follows head XYZ
     if(bn==='neck') hw = 0.55*smooth((A.neckBottom-y)/Math.max(1,A.neckBottom-A.neckTop));
@@ -1002,13 +1004,15 @@ function tick(now){
   // 今後口差分を追加しても重ね合わせ自体が起きないので再発しない。
   // ちらつき防止に開閉で閾値をずらす（ヒステリシス）。
   var mouthShown = false;
+  // まばたきも同じ勝者総取り: 開き目セットと閉じ目のクロスフェード混合が
+  // 「まばたきの違和感」の原因なので、閾値スナップで常にどちらか一方だけ表示
+  var eyesShown = true;
   fadeAlpha = function (L, e) {
     if (L.name && L.name.indexOf('expr_') === 0) {
       if (L.name !== activeExpr && L.name !== 'expr_blush') return 0;
       if (L.name === 'expr_blush') return 0; // 照れ頬は将来の感情実装で使用
-      // まばたきと連動: 目を閉じるほど表情目を消し、閉じ目(eye_close)に譲る
-      var v = (e.eyeOpenL + e.eyeOpenR) / 2;
-      return smooth((v - (0.10 + e.eyeEase * 0.45)) / 0.15);
+      // まばたきと連動: 閉じ目表示中は表情目も消す（スナップ）
+      return eyesShown ? 1 : 0;
     }
     if (L.fade === 'mouthOpen' || L.fade === 'mouthClose') {
       var base = 0.05 + e.mouthEase * 0.35;
@@ -1016,6 +1020,13 @@ function tick(now){
       if (L.fade === 'mouthClose') return mouthShown ? 0 : 1;
       var target = hasVariant(activeMouth) ? activeMouth : 'mouth_open';
       return mouthShown && L.name === target ? 1 : 0;
+    }
+    if (L.fade === 'eyeOpen' || L.fade === 'eyeClose') {
+      var vE = (e.eyeOpenL + e.eyeOpenR) / 2;
+      var thrE = 0.10 + e.eyeEase * 0.45;
+      eyesShown = vE > (eyesShown ? thrE : thrE + 0.08);
+      if (L.fade === 'eyeClose') return eyesShown ? 0 : 1;
+      return eyesShown ? 1 : 0;
     }
     return origFadeAlpha(L, e);
   };

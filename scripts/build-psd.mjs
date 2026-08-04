@@ -180,7 +180,34 @@ function stampRect(diffFile, rect) {
           if (clean[(y + dy) * rw + (x + dx)]) { dilated[y * rw + x] = 1; break }
     }
   }
-  // 4) マスク部分だけ差分画像から転写
+  // 3.5) トーン合わせ: 納品差分画像は元絵と肌トーンが微妙に違うことがあり、
+  // マスク境界が長方形の色ムラ帯に見える（まばたき時の違和感の原因）。
+  // マスク外＝本来同一のはずの画素で平均色差を測り、移植時に差し引く。
+  let tr = 0, tg = 0, tb = 0, tn = 0
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (dilated[(y - y0) * rw + (x - x0)]) continue
+      const sx = Math.min(img.width - 1, Math.round(x * scale))
+      const sy = Math.min(img.height - 1, Math.round(y * scale))
+      const si = (sy * img.width + sx) * 4
+      const bx = Math.min(BASE_IMG.width - 1, Math.round(x * baseScale))
+      const by = Math.min(BASE_IMG.height - 1, Math.round(y * baseScale))
+      const bi = (by * BASE_IMG.width + bx) * 4
+      tr += img.data[si] - BASE_IMG.data[bi]
+      tg += img.data[si + 1] - BASE_IMG.data[bi + 1]
+      tb += img.data[si + 2] - BASE_IMG.data[bi + 2]
+      tn++
+    }
+  }
+  const or_ = tn > 50 ? tr / tn : 0
+  const og_ = tn > 50 ? tg / tn : 0
+  const ob_ = tn > 50 ? tb / tn : 0
+
+  // 4) マスク部分だけ差分画像から転写（トーン補正＋縁2pxの羽根ぼかし）
+  const isMask = (x, y) => {
+    if (x < x0 || x >= x1 || y < y0 || y >= y1) return false
+    return !!dilated[(y - y0) * rw + (x - x0)]
+  }
   const out = new Uint8ClampedArray(W * H * 4)
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
@@ -189,10 +216,20 @@ function stampRect(diffFile, rect) {
       const sy = Math.min(img.height - 1, Math.round(y * scale))
       const si = (sy * img.width + sx) * 4
       const di = (y * W + x) * 4
-      out[di] = img.data[si]
-      out[di + 1] = img.data[si + 1]
-      out[di + 2] = img.data[si + 2]
-      out[di + 3] = 255
+      out[di] = img.data[si] - or_
+      out[di + 1] = img.data[si + 1] - og_
+      out[di + 2] = img.data[si + 2] - ob_
+      // 縁からの距離で 140 → 210 → 255 と段階的に不透明に
+      let edge1 = false, edge2 = false
+      for (let dd = -1; dd <= 1 && !edge1; dd++) {
+        if (!isMask(x + dd, y - 1) || !isMask(x + dd, y + 1) || !isMask(x - 1, y + dd) || !isMask(x + 1, y + dd)) edge1 = true
+      }
+      if (!edge1) {
+        for (let dd = -2; dd <= 2 && !edge2; dd++) {
+          if (!isMask(x + dd, y - 2) || !isMask(x + dd, y + 2) || !isMask(x - 2, y + dd) || !isMask(x + 2, y + dd)) edge2 = true
+        }
+      }
+      out[di + 3] = edge1 ? 140 : edge2 ? 210 : 255
     }
   }
   return out
