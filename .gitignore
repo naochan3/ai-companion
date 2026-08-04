@@ -1,0 +1,4 @@
+﻿aituber-kit/
+node_modules/
+*.local.*
+.env
