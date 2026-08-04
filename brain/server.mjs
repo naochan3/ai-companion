@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { buildPrompt } from "./lib/prompt.mjs";
 import { sharedWorker } from "./lib/worker.mjs";
 import { sanitizeSpeech } from "./lib/sanitize.mjs";
+import { sameHistory } from "./lib/context.mjs";
 
 const MODEL_ID = "companion";
 
@@ -64,6 +65,9 @@ function loadPersona() {
   return null;
 }
 
+// ワーカーが実際に見てきた会話（system以外のテキスト列）。null は不明＝次回は必ず履歴再生
+let seenHistory = [];
+
 async function handleChat(req, res, body) {
   const { messages = [], stream = false } = body;
   const personaOverride = loadPersona();
@@ -75,13 +79,19 @@ async function handleChat(req, res, body) {
         .join("\n")) + OUTPUT_CONTRACT;
 
   // 常駐ワーカーが会話文脈を保持するため、通常は最新のユーザー発言だけ渡す。
-  // ワーカーが新規起動（初回/人格変更/クラッシュ後）の時だけ履歴を復元する。
+  // ワーカーが新規起動（初回/人格変更/クラッシュ後）の時と、フロントの履歴が
+  // ワーカーの見てきた文脈と食い違う時（セッション切替・過去会話の再開）は
+  // ワーカーを作り直して履歴を再生する。
+  const nonSystem = messages.filter((m) => m.role !== "system");
+  const historyTexts = nonSystem.slice(0, -1).map((m) => contentToText(m.content));
+  const lastText = contentToText(nonSystem.at(-1)?.content ?? "");
+
   let prompt;
-  if (sharedWorker.willBeFresh(system)) {
-    prompt = buildPrompt(messages).prompt;
+  if (!sharedWorker.willBeFresh(system) && sameHistory(seenHistory, historyTexts)) {
+    prompt = lastText;
   } else {
-    const last = messages.filter((m) => m.role !== "system").at(-1);
-    prompt = contentToText(last?.content ?? "");
+    sharedWorker.restart();
+    prompt = buildPrompt(messages).prompt;
   }
 
   const base = {
@@ -94,9 +104,12 @@ async function handleChat(req, res, body) {
   if (!stream) {
     try {
       const text = await sharedWorker.ask({ system, prompt });
+      const reply = sanitizeSpeech(text);
+      seenHistory = [...historyTexts, lastText, reply];
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(chatCompletionBody(sanitizeSpeech(text))));
+      res.end(JSON.stringify(chatCompletionBody(reply)));
     } catch (e) {
+      seenHistory = null;
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
@@ -122,12 +135,19 @@ async function handleChat(req, res, body) {
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
   };
   try {
+    let replyFull = "";
     await sharedWorker.ask({
       system,
       prompt,
-      onDelta: (d) => sendDelta(sanitizeSpeech(d)),
+      onDelta: (d) => {
+        const piece = sanitizeSpeech(d);
+        replyFull += piece;
+        sendDelta(piece);
+      },
     });
+    seenHistory = [...historyTexts, lastText, replyFull];
   } catch (e) {
+    seenHistory = null;
     sendDelta(`……ごめん、頭が真っ白になっちゃった。もう一回言って？`);
   }
   const done = {

@@ -67,6 +67,14 @@ export class ClaudeWorker {
     return !this.child || this.system !== system;
   }
 
+  // 文脈を破棄して、次の ask で新しいプロセスを立てさせる（セッション切替用）
+  restart() {
+    if (this.child) {
+      try { this.child.kill(); } catch { /* ignore */ }
+      this.child = null;
+    }
+  }
+
   ensure(system) {
     // 人格が変わったら作り直す（システムプロンプトは起動時固定のため）
     if (this.child && this.system === system) return this.child;
