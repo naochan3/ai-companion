@@ -996,6 +996,12 @@ function tick(now){
     winkR: null,
   };
   var origFadeAlpha = fadeAlpha;
+  // 口は1フレームに必ず1枚だけ全表示する（勝者総取り）。
+  // 元実装のクロスフェードは閾値付近で閉じ口と開き口が半透明で重なり、
+  // 発話中に唇線が透ける「ピクセル漏れ」に見える。スナップ切替なら
+  // 今後口差分を追加しても重ね合わせ自体が起きないので再発しない。
+  // ちらつき防止に開閉で閾値をずらす（ヒステリシス）。
+  var mouthShown = false;
   fadeAlpha = function (L, e) {
     if (L.name && L.name.indexOf('expr_') === 0) {
       if (L.name !== activeExpr && L.name !== 'expr_blush') return 0;
@@ -1004,12 +1010,14 @@ function tick(now){
       var v = (e.eyeOpenL + e.eyeOpenR) / 2;
       return smooth((v - (0.10 + e.eyeEase * 0.45)) / 0.15);
     }
-    var a = origFadeAlpha(L, e);
-    if (L.fade === 'mouthOpen' && a > 0 && L.name.indexOf('mouth_open') === 0) {
+    if (L.fade === 'mouthOpen' || L.fade === 'mouthClose') {
+      var base = 0.05 + e.mouthEase * 0.35;
+      mouthShown = e.mouthOpen > (mouthShown ? base : base + 0.08);
+      if (L.fade === 'mouthClose') return mouthShown ? 0 : 1;
       var target = hasVariant(activeMouth) ? activeMouth : 'mouth_open';
-      return L.name === target ? a : 0;
+      return mouthShown && L.name === target ? 1 : 0;
     }
-    return a;
+    return origFadeAlpha(L, e);
   };
 
   window.addEventListener('message', function (ev) {

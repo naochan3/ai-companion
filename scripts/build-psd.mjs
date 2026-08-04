@@ -218,8 +218,35 @@ if (canvases.has('mouth')) {
     const cx = sx / n
     const cy = sy / n
     const closedW = Math.max(10, maxX - minX)
-    // mouth_close = 元の口
-    canvases.set('mouth_close', src)
+    // mouth_close = 元絵そのままの羽根ぼかし円形パッチ。
+    // 分解由来の口パッチは周辺スキンに薄い色ムラがあり、口の開閉のたびに
+    // ムラが点滅して「ピクセル漏れ」に見える。元絵のピクセルを使えば
+    // 静止時の見た目＝元絵が構造的に保証される（今後の再ビルドでも同じ）。
+    const closePatch = new Uint8ClampedArray(W * H * 4)
+    {
+      const sB = BASE_IMG.width / W
+      const R = 52, FE = 14 // コア半径 / 羽根ぼかし幅(px)
+      const y0p = Math.max(0, Math.floor(cy - R - FE))
+      const y1p = Math.min(H - 1, Math.ceil(cy + R + FE))
+      const x0p = Math.max(0, Math.floor(cx - R - FE))
+      const x1p = Math.min(W - 1, Math.ceil(cx + R + FE))
+      for (let y = y0p; y <= y1p; y++) {
+        for (let x = x0p; x <= x1p; x++) {
+          const d = Math.hypot(x - cx, y - cy)
+          if (d > R + FE) continue
+          const a = d <= R ? 1 : 1 - (d - R) / FE
+          const sxB = Math.min(BASE_IMG.width - 1, Math.round(x * sB))
+          const syB = Math.min(BASE_IMG.height - 1, Math.round(y * sB))
+          const si = (syB * BASE_IMG.width + sxB) * 4
+          const di = (y * W + x) * 4
+          closePatch[di] = BASE_IMG.data[si]
+          closePatch[di + 1] = BASE_IMG.data[si + 1]
+          closePatch[di + 2] = BASE_IMG.data[si + 2]
+          closePatch[di + 3] = Math.round(a * BASE_IMG.data[si + 3])
+        }
+      }
+    }
+    canvases.set('mouth_close', closePatch)
     order[order.indexOf('mouth')] = 'mouth_close'
     // mouth_open = ユーザー納品の差分画像（自然な半開き）から矩形移植
     const openLayer = stampRect('mouth-e.png', {
@@ -397,6 +424,99 @@ for (const name of order) {
     bottom: H,
     imageData: { width: W, height: H, data },
   })
+}
+
+// ── 静止フレーム監査 ──────────────────────────────────────────
+// 静止状態（口閉じ・目開き・表情オーバーレイなし）の合成結果を元絵と比較し、
+// 色ズレの塊＝「ピクセル漏れ」候補をビルド時に検出して報告する。
+// 今後差分レイヤーを追加・再ビルドした時も、この監査が自動で漏れを知らせる。
+{
+  const hiddenAtRest = (n) => /^(mouth_open|eye_close$|expr_)/.test(n)
+  const flat = new Float32Array(W * H * 4)
+  for (const c of children) {
+    if (hiddenAtRest(c.name)) continue
+    const d = c.imageData.data
+    for (let i = 0; i < flat.length; i += 4) {
+      const a = d[i + 3] / 255
+      if (a === 0) continue
+      flat[i] = d[i] * a + flat[i] * (1 - a)
+      flat[i + 1] = d[i + 1] * a + flat[i + 1] * (1 - a)
+      flat[i + 2] = d[i + 2] * a + flat[i + 2] * (1 - a)
+      flat[i + 3] = Math.min(255, d[i + 3] + flat[i + 3] * (1 - a))
+    }
+  }
+  const sB = BASE_IMG.width / W
+  const baseAt = (x, y) => {
+    const sx = Math.min(BASE_IMG.width - 1, Math.round(x * sB))
+    const sy = Math.min(BASE_IMG.height - 1, Math.round(y * sB))
+    return (sy * BASE_IMG.width + sx) * 4
+  }
+  // 輪郭線ぎわは縮尺の丸めで必ずズレるので、元絵の3x3近傍が平坦な場所だけ比較する
+  const isFlatArea = (x, y) => {
+    let mn = [255, 255, 255], mx = [0, 0, 0]
+    for (let dy = -2; dy <= 2; dy += 2) {
+      for (let dx = -2; dx <= 2; dx += 2) {
+        const si = baseAt(Math.max(0, Math.min(W - 1, x + dx)), Math.max(0, Math.min(H - 1, y + dy)))
+        for (let ch = 0; ch < 3; ch++) {
+          const v = BASE_IMG.data[si + ch]
+          if (v < mn[ch]) mn[ch] = v
+          if (v > mx[ch]) mx[ch] = v
+        }
+      }
+    }
+    return (mx[0] - mn[0]) + (mx[1] - mn[1]) + (mx[2] - mn[2]) < 60
+  }
+  const badMask = new Uint8Array(W * H)
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4
+      if (flat[i + 3] < 200) continue
+      const si = baseAt(x, y)
+      if (BASE_IMG.data[si + 3] < 200) continue
+      if (!isFlatArea(x, y)) continue
+      const dr = flat[i] - BASE_IMG.data[si]
+      const dg = flat[i + 1] - BASE_IMG.data[si + 1]
+      const db = flat[i + 2] - BASE_IMG.data[si + 2]
+      if (dr * dr + dg * dg + db * db > 48 * 48) badMask[y * W + x] = 1
+    }
+  }
+  // 8近傍で塊にまとめ、一定サイズ以上だけ報告
+  const seen = new Uint8Array(W * H)
+  const clusters = []
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const p0 = y * W + x
+      if (!badMask[p0] || seen[p0]) continue
+      const stack = [p0]
+      seen[p0] = 1
+      let n = 0, minX = x, maxX = x, minY = y, maxY = y
+      while (stack.length) {
+        const p = stack.pop()
+        n++
+        const px = p % W, py = (p / W) | 0
+        if (px < minX) minX = px
+        if (px > maxX) maxX = px
+        if (py < minY) minY = py
+        if (py > maxY) maxY = py
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const q = (py + dy) * W + (px + dx)
+            if (px + dx < 0 || px + dx >= W || py + dy < 0 || py + dy >= H) continue
+            if (badMask[q] && !seen[q]) { seen[q] = 1; stack.push(q) }
+          }
+        }
+      }
+      if (n >= 30) clusters.push({ n, box: [minX, minY, maxX, maxY] })
+    }
+  }
+  if (clusters.length) {
+    console.warn(`⚠ 静止フレーム監査: 元絵と色がズレた塊 ${clusters.length}件（ピクセル漏れ候補）`)
+    for (const c of clusters.sort((a, b) => b.n - a.n).slice(0, 10)) {
+      console.warn(`  - ${c.n}px @ x${c.box[0]}-${c.box[2]} y${c.box[1]}-${c.box[3]}`)
+    }
+  } else {
+    console.log('静止フレーム監査: 元絵との色ズレなし（クリーン）')
+  }
 }
 
 const buffer = agpsd.writePsdBuffer(
