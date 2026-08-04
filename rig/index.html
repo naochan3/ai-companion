@@ -893,6 +893,11 @@ function tick(now){
   if (header) header.style.display = 'none';
   const panel = document.getElementById('panel');
   if (panel) panel.style.display = 'none';
+  // デバッグ表示（リグ情報・警告・FPS）も埋め込みでは隠す
+  for (const id of ['rigInfo', 'fps']) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
   document.body.style.background = 'transparent';
   const stage = document.getElementById('stage');
   if (stage) stage.style.background = 'transparent';

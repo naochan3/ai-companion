@@ -56,14 +56,65 @@ for (const layer of meta.layers) {
   }
 }
 
-// 差分画像（1254px）から指定矩形（1024キャンバス座標）を全面レイヤーとして移植する
+// 差分画像から「元画像と異なるピクセルだけ」を透明付きで抜き出す。
+// 矩形ベタ貼りだと頭の視差移動でパッチの縁がズレて見えるため、真の差分のみ移植する。
 const DIFF_DIR = 'C:/Users/nekop/Desktop/Development/repos/_active/ai-companion/assets/character/diffs'
+const BASE_IMG = PNG.sync.read(
+  readFileSync('C:/Users/nekop/Desktop/Development/repos/_active/ai-companion/assets/character/nemu-base.png')
+)
 function stampRect(diffFile, rect) {
   const img = PNG.sync.read(readFileSync(join(DIFF_DIR, diffFile)))
   const scale = img.width / W
+  const baseScale = BASE_IMG.width / W
+  const x0 = Math.max(0, rect.x0)
+  const x1 = Math.min(W, rect.x1)
+  const y0 = Math.max(0, rect.y0)
+  const y1 = Math.min(H, rect.y1)
+  const rw = x1 - x0
+  const rh = y1 - y0
+  // 1) 差分マスク作成（色距離しきい値）
+  const mask = new Uint8Array(rw * rh)
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const sx = Math.min(img.width - 1, Math.round(x * scale))
+      const sy = Math.min(img.height - 1, Math.round(y * scale))
+      const si = (sy * img.width + sx) * 4
+      const bx = Math.min(BASE_IMG.width - 1, Math.round(x * baseScale))
+      const by = Math.min(BASE_IMG.height - 1, Math.round(y * baseScale))
+      const bi = (by * BASE_IMG.width + bx) * 4
+      const d =
+        Math.abs(img.data[si] - BASE_IMG.data[bi]) +
+        Math.abs(img.data[si + 1] - BASE_IMG.data[bi + 1]) +
+        Math.abs(img.data[si + 2] - BASE_IMG.data[bi + 2])
+      if (d > 60) mask[(y - y0) * rw + (x - x0)] = 1
+    }
+  }
+  // 2) 孤立ノイズ除去（周囲8近傍に2つ未満なら消す）→ 3) 1px膨張（縁のギザ防止）
+  const clean = new Uint8Array(mask)
+  for (let y = 1; y < rh - 1; y++) {
+    for (let x = 1; x < rw - 1; x++) {
+      if (!mask[y * rw + x]) continue
+      let n = 0
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++)
+          if ((dx || dy) && mask[(y + dy) * rw + (x + dx)]) n++
+      if (n < 2) clean[y * rw + x] = 0
+    }
+  }
+  const dilated = new Uint8Array(clean)
+  for (let y = 1; y < rh - 1; y++) {
+    for (let x = 1; x < rw - 1; x++) {
+      if (clean[y * rw + x]) continue
+      for (let dy = -1; dy <= 1 && !dilated[y * rw + x]; dy++)
+        for (let dx = -1; dx <= 1; dx++)
+          if (clean[(y + dy) * rw + (x + dx)]) { dilated[y * rw + x] = 1; break }
+    }
+  }
+  // 4) マスク部分だけ差分画像から転写
   const out = new Uint8ClampedArray(W * H * 4)
-  for (let y = Math.max(0, rect.y0); y < Math.min(H, rect.y1); y++) {
-    for (let x = Math.max(0, rect.x0); x < Math.min(W, rect.x1); x++) {
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (!dilated[(y - y0) * rw + (x - x0)]) continue
       const sx = Math.min(img.width - 1, Math.round(x * scale))
       const sy = Math.min(img.height - 1, Math.round(y * scale))
       const si = (sy * img.width + sx) * 4
