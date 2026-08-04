@@ -430,9 +430,10 @@ for (const name of order) {
 // 静止状態（口閉じ・目開き・表情オーバーレイなし）の合成結果を元絵と比較し、
 // 色ズレの塊＝「ピクセル漏れ」候補をビルド時に検出して報告する。
 // 今後差分レイヤーを追加・再ビルドした時も、この監査が自動で漏れを知らせる。
-{
+function auditRestFrame(quiet = false) {
   const hiddenAtRest = (n) => /^(mouth_open|eye_close$|expr_)/.test(n)
   const flat = new Float32Array(W * H * 4)
+  const topName = new Array(W * H).fill(null) // 各画素を最終的に描いたレイヤー名
   for (const c of children) {
     if (hiddenAtRest(c.name)) continue
     const d = c.imageData.data
@@ -443,6 +444,7 @@ for (const name of order) {
       flat[i + 1] = d[i + 1] * a + flat[i + 1] * (1 - a)
       flat[i + 2] = d[i + 2] * a + flat[i + 2] * (1 - a)
       flat[i + 3] = Math.min(255, d[i + 3] + flat[i + 3] * (1 - a))
+      if (d[i + 3] > 200) topName[i >> 2] = c.name
     }
   }
   const sB = BASE_IMG.width / W
@@ -506,16 +508,203 @@ for (const name of order) {
           }
         }
       }
-      if (n >= 30) clusters.push({ n, box: [minX, minY, maxX, maxY] })
+      if (n >= 30) {
+        // どのレイヤーが最前面かの内訳（修復方針の判断材料）
+        const layers = {}
+        for (let yy = minY; yy <= maxY; yy++) {
+          for (let xx = minX; xx <= maxX; xx++) {
+            const pp = yy * W + xx
+            if (!badMask[pp]) continue
+            const t = topName[pp] || '(none)'
+            layers[t] = (layers[t] || 0) + 1
+          }
+        }
+        clusters.push({ n, box: [minX, minY, maxX, maxY], layers })
+      }
     }
   }
-  if (clusters.length) {
-    console.warn(`⚠ 静止フレーム監査: 元絵と色がズレた塊 ${clusters.length}件（ピクセル漏れ候補）`)
-    for (const c of clusters.sort((a, b) => b.n - a.n).slice(0, 10)) {
-      console.warn(`  - ${c.n}px @ x${c.box[0]}-${c.box[2]} y${c.box[1]}-${c.box[3]}`)
+  if (!quiet) {
+    if (clusters.length) {
+      console.warn(`⚠ 静止フレーム監査: 元絵と色がズレた塊 ${clusters.length}件（ピクセル漏れ候補）`)
+      for (const c of clusters.sort((a, b) => b.n - a.n).slice(0, 10)) {
+        const who = Object.entries(c.layers).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(' ')
+        console.warn(`  - ${c.n}px @ x${c.box[0]}-${c.box[2]} y${c.box[1]}-${c.box[3]} [${who}]`)
+      }
+    } else {
+      console.log('静止フレーム監査: 元絵との色ズレなし（クリーン）')
     }
-  } else {
-    console.log('静止フレーム監査: 元絵との色ズレなし（クリーン）')
+  }
+  return { badMask, clusters, topName, baseAt }
+}
+
+// ── 監査に基づく自動修復 ─────────────────────────────────────
+// 色ズレ画素の最前面レイヤーが「静的な下地」(topwear=首統合済み) のときは、
+// その画素を元絵ピクセルで焼き直す。話す時に顎・頭が動いて下地が覗くと
+// ズレがちらついて見える「首元ノイズ」を、下地の見た目＝元絵にして解消する。
+// 髪など動くレイヤーが最前面の画素には触らない（動きで残像になるため）。
+{
+  const REPAIRABLE = new Set(['topwear'])
+  const first = auditRestFrame(true)
+  // 3px膨張: ズレ縁のにじみも一緒に直す
+  const dil = new Uint8Array(W * H)
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!first.badMask[y * W + x]) continue
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -3; dx <= 3; dx++) {
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
+          dil[ny * W + nx] = 1
+        }
+      }
+    }
+  }
+  const layerData = new Map(children.map((c) => [c.name, c.imageData.data]))
+  let repaired = 0
+  const counts = {}
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const p = y * W + x
+      if (!dil[p]) continue
+      const layerName = first.topName[p]
+      if (!layerName || !REPAIRABLE.has(layerName)) continue
+      const si = first.baseAt(x, y)
+      if (BASE_IMG.data[si + 3] < 200) continue
+      const d = layerData.get(layerName)
+      const di = p * 4
+      d[di] = BASE_IMG.data[si]
+      d[di + 1] = BASE_IMG.data[si + 1]
+      d[di + 2] = BASE_IMG.data[si + 2]
+      d[di + 3] = 255
+      repaired++
+      counts[layerName] = (counts[layerName] || 0) + 1
+    }
+  }
+  if (repaired) {
+    console.log(
+      `自動修復: ${repaired}px を元絵で焼き直し (${Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(', ')})`
+    )
+  }
+
+  // ── 動くレイヤーに紛れ込んだ孤立ノイズ成分の除去 ──
+  // 分解が handwear 等の「動くレイヤー」へ誤って入れた断片は、腕・頭の
+  // アニメと一緒に泳いで首元ノイズに見える。レイヤー本体（最大成分）から
+  // 独立した小成分に色ズレ画素が含まれる場合、その成分ごと削除し、
+  // 下地(topwear)へ元絵を焼き込んで埋める。
+  const movingBad = new Set()
+  for (let p = 0; p < W * H; p++) {
+    if (!first.badMask[p]) continue
+    const t = first.topName[p]
+    if (t && !REPAIRABLE.has(t)) movingBad.add(t)
+  }
+  for (const name of movingBad) {
+    const d = layerData.get(name)
+    if (!d) continue
+    const label = new Int32Array(W * H).fill(-1)
+    const sizes = []
+    for (let p = 0; p < W * H; p++) {
+      if (d[p * 4 + 3] <= 32 || label[p] >= 0) continue
+      const id = sizes.length
+      let n = 0
+      const stack = [p]
+      label[p] = id
+      while (stack.length) {
+        const q = stack.pop()
+        n++
+        const qx = q % W, qy = (q / W) | 0
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = qx + dx, ny = qy + dy
+            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
+            const r = ny * W + nx
+            if (d[r * 4 + 3] > 32 && label[r] < 0) { label[r] = id; stack.push(r) }
+          }
+        }
+      }
+      sizes.push(n)
+    }
+    const maxSize = Math.max(...sizes, 1)
+    const cut = new Set()
+    for (let p = 0; p < W * H; p++) {
+      if (!first.badMask[p] || first.topName[p] !== name) continue
+      const id = label[p]
+      if (id >= 0 && sizes[id] < maxSize * 0.5) cut.add(id)
+    }
+    if (!cut.size) continue
+    let removed = 0
+    const topD = layerData.get('topwear')
+    for (let p = 0; p < W * H; p++) {
+      if (label[p] < 0 || !cut.has(label[p])) continue
+      d[p * 4 + 3] = 0
+      removed++
+      const x = p % W, y = (p / W) | 0
+      const si = first.baseAt(x, y)
+      if (topD && BASE_IMG.data[si + 3] > 200) {
+        topD[p * 4] = BASE_IMG.data[si]
+        topD[p * 4 + 1] = BASE_IMG.data[si + 1]
+        topD[p * 4 + 2] = BASE_IMG.data[si + 2]
+        topD[p * 4 + 3] = 255
+      }
+    }
+    console.log(`孤立ノイズ除去: ${name} から ${cut.size}成分 ${removed}px を削除し下地へ元絵を焼き込み`)
+  }
+
+  // ── 本体につながった「にじみ縁」の漏れ画素の削り取り ──
+  // 分解が袖などの動くレイヤーの縁に染み出させた誤ピクセルは本体成分と
+  // 連結しているため、画素単位で削って下地(topwear)に元絵を焼き込む。
+  // 元絵側が平坦（＝服や肌）である場所しか監査に載らないので、削っても
+  // 本来の絵は失われない。
+  {
+    let shaved = 0
+    const topD = layerData.get('topwear')
+    for (let p = 0; p < W * H; p++) {
+      if (!first.badMask[p]) continue
+      const t = first.topName[p]
+      if (!t || REPAIRABLE.has(t)) continue
+      const d = layerData.get(t)
+      if (!d) continue
+      const x = p % W, y = (p / W) | 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue
+          const q = ny * W + nx
+          if (d[q * 4 + 3] === 0) continue
+          d[q * 4 + 3] = 0
+          shaved++
+          const si = first.baseAt(nx, ny)
+          if (topD && BASE_IMG.data[si + 3] > 200) {
+            topD[q * 4] = BASE_IMG.data[si]
+            topD[q * 4 + 1] = BASE_IMG.data[si + 1]
+            topD[q * 4 + 2] = BASE_IMG.data[si + 2]
+            topD[q * 4 + 3] = 255
+          }
+        }
+      }
+    }
+    if (shaved) console.log(`にじみ縁削り: 動くレイヤーから ${shaved}px を削除し下地へ元絵を焼き込み`)
+  }
+
+  auditRestFrame() // 修復後の最終結果を報告
+
+  // BRAIN_DUMP_FLAT=パス を指定すると静止フレームの合成PNGを書き出す（目視検証用）
+  if (process.env.BRAIN_DUMP_FLAT) {
+    const hiddenAtRest = (n) => /^(mouth_open|eye_close$|expr_)/.test(n)
+    const png = new PNG({ width: W, height: H })
+    for (const c of children) {
+      if (hiddenAtRest(c.name)) continue
+      const d = c.imageData.data
+      for (let i = 0; i < png.data.length; i += 4) {
+        const a = d[i + 3] / 255
+        if (a === 0) continue
+        png.data[i] = d[i] * a + png.data[i] * (1 - a)
+        png.data[i + 1] = d[i + 1] * a + png.data[i + 1] * (1 - a)
+        png.data[i + 2] = d[i + 2] * a + png.data[i + 2] * (1 - a)
+        png.data[i + 3] = Math.min(255, d[i + 3] + png.data[i + 3] * (1 - a))
+      }
+    }
+    writeFileSync(process.env.BRAIN_DUMP_FLAT, PNG.sync.write(png))
+    console.log(`静止フレームPNG: ${process.env.BRAIN_DUMP_FLAT}`)
   }
 }
 
